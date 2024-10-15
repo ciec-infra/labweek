@@ -4,6 +4,7 @@ import openai
 import logging
 from slack_bolt import App
 from openai import OpenAI
+from functools import lru_cache
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 # Configure logging
@@ -21,14 +22,21 @@ app = App(token=SLACK_BOT_TOKEN)
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 # GitHub configuration
-GITHUB_REPO = 'viratramesh03/TerraformTraining'  # Replace with your GitHub repository
+GITHUB_REPO = 'ciec-infra/labweek'  # Replace with your GitHub repository
 
-# Updated GitHub search function
+cache = {}
+
+# Cache function to store GitHub responses
+@lru_cache(maxsize=100)  # Adjust maxsize based on your memory/storage limits
 def search_github_docs(query):
+    if query in cache:
+        logger.info(f"Cache hit for query: {query}")
+        return cache[query]
+
     search_url = 'https://api.github.com/search/code'
     headers = {'Authorization': f'token {GITHUB_TOKEN}'}
     params = {
-        'q': f'{query} repo:{GITHUB_REPO} extension:md',  # Ensure .md files are included
+        'q': f'{query} repo:{GITHUB_REPO} extension:md',  # Search in .md files
         'per_page': 5  # Limit results for efficiency
     }
 
@@ -42,13 +50,48 @@ def search_github_docs(query):
             for item in results:
                 file_path = item['path']
                 html_url = item['html_url']
-                result_texts.append(f"<{html_url}|{file_path}>")
-            return "\n".join(result_texts)
+
+                # Get the content of the file to extract relevant information
+                file_content = fetch_github_file_content(html_url)
+
+                result_texts.append(f"<{html_url}|{file_path}>:\n{file_content}")
+
+            # Cache the result for future queries
+            cache[query] = "\n\n".join(result_texts)
+            return cache[query]
         else:
             return "No relevant documentation found on GitHub."
     else:
         logger.error(f"GitHub API Error: {response.status_code} - {response.text}")
         return "Error searching GitHub documentation."
+
+
+def fetch_github_file_content(file_url):
+    """Fetch the file content from GitHub and return relevant sections."""
+    raw_url = file_url.replace('github.com', 'raw.githubusercontent.com').replace('/blob/', '/')
+    response = requests.get(raw_url)
+
+    if response.status_code == 200:
+        content = response.text
+
+        # You can add more sophisticated text extraction here (based on user query)
+        # Extract first few lines or relevant section
+        relevant_content = extract_relevant_content(content)
+
+        return relevant_content[:500]  # Limiting the number of characters
+    else:
+        return "Error fetching content."
+
+
+def extract_relevant_content(content):
+    """Extract content from the Markdown file based on some logic."""
+    # You can add advanced parsing or regex matching here.
+    # For now, let's just extract the first paragraph.
+    lines = content.splitlines()
+    filtered_lines = [line for line in lines if line.strip() and not line.startswith('#')]  # Skipping headers
+
+    return "\n".join(filtered_lines[:5])  # Return first few relevant lines
+
 
 @app.event("message")
 def handle_message_events(event, say):
